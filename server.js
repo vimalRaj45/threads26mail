@@ -3,34 +3,38 @@ import nodemailer from "nodemailer";
 
 const fastify = Fastify({ logger: true });
 
-// ---------------- OTP STORE ----------------
-const otpStore = new Map();
+// ---------------- OTP STORE (memory) ----------------
+const otpStore = new Map(); 
+// email -> { otp, expiresAt }
 
 // ---------------- OTP GENERATOR ----------------
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000);
 }
 
-// ---------------- MAIL TRANSPORT ----------------
+// ---------------- MAIL TRANSPORTER ----------------
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: "vimalraj5207@gmail.com",    
-    pass: "txcmjdwgbprjaxrg",            
+    user: "vimalraj5207@gmail.com",     // sender
+    pass: "txcmjdwgbprjaxrg",            // 16-char app password (NO SPACES)
   },
 });
 
-// ---------------- SEND OTP ----------------
+// ---------------- SEND OTP API ----------------
 fastify.post("/send-otp", async (req, reply) => {
   const { email } = req.body;
-  if (!email) return reply.code(400).send({ error: "Email required" });
+  if (!email) {
+    return reply.code(400).send({ error: "Email required" });
+  }
 
   const otp = generateOTP();
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 min
+  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+
   otpStore.set(email, { otp, expiresAt });
 
   await transporter.sendMail({
-    from: `"VSGRPS OTP" <${process.env.GMAIL_USER}>`,
+    from: `"VSGRPS OTP" <vimalraj5207@gmail.com>`,
     to: email,
     subject: "OTP Verification",
     html: `
@@ -42,16 +46,20 @@ fastify.post("/send-otp", async (req, reply) => {
   return { success: true, message: "OTP sent" };
 });
 
-// ---------------- VERIFY OTP ----------------
+// ---------------- VERIFY OTP API ----------------
 fastify.post("/verify-otp", async (req, reply) => {
   const { email, otp } = req.body;
-  const record = otpStore.get(email);
 
-  if (!record) return reply.code(400).send({ error: "OTP not found" });
+  const record = otpStore.get(email);
+  if (!record) {
+    return reply.code(400).send({ error: "OTP not found" });
+  }
+
   if (Date.now() > record.expiresAt) {
     otpStore.delete(email);
     return reply.code(400).send({ error: "OTP expired" });
   }
+
   if (record.otp !== Number(otp)) {
     return reply.code(400).send({ error: "Invalid OTP" });
   }
@@ -61,47 +69,26 @@ fastify.post("/verify-otp", async (req, reply) => {
 });
 
 // ---------------- HTML PAGE ----------------
-fastify.get("/", async (_, reply) => {
+fastify.get("/", async (req, reply) => {
   reply.type("text/html").send(`
 <!DOCTYPE html>
 <html>
 <head>
   <title>OTP Verification</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 400px;
-      margin: 50px auto;
-      padding: 20px;
-    }
-    h2 {
-      text-align: center;
-    }
-    input, button {
-      width: 100%;
-      padding: 10px;
-      margin: 8px 0;
-      font-size: 16px;
-    }
-    button {
-      cursor: pointer;
-    }
-    #msg {
-      margin-top: 10px;
-      text-align: center;
-      font-weight: bold;
-    }
+    body { font-family: Arial; max-width: 400px; margin: 50px auto; }
+    input, button { width: 100%; padding: 10px; margin: 8px 0; }
+    button { cursor: pointer; }
   </style>
 </head>
 <body>
 
   <h2>Send OTP</h2>
-  <input id="email" type="email" placeholder="Enter your email" />
+  <input id="email" placeholder="Enter email" />
   <button onclick="sendOTP()">Send OTP</button>
 
   <h2>Verify OTP</h2>
-  <input id="otp" type="number" placeholder="Enter OTP" />
+  <input id="otp" placeholder="Enter OTP" />
   <button onclick="verifyOTP()">Verify OTP</button>
 
   <p id="msg"></p>
@@ -114,9 +101,7 @@ async function sendOTP() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email })
   });
-  const data = await res.json();
-  document.getElementById("msg").innerText =
-    data.message || data.error || "Error";
+  document.getElementById("msg").innerText = await res.text();
 }
 
 async function verifyOTP() {
@@ -127,9 +112,7 @@ async function verifyOTP() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, otp })
   });
-  const data = await res.json();
-  document.getElementById("msg").innerText =
-    data.message || data.error || "Error";
+  document.getElementById("msg").innerText = await res.text();
 }
 </script>
 
@@ -137,6 +120,7 @@ async function verifyOTP() {
 </html>
   `);
 });
+
 
 // ---------------- START SERVER (RENDER) ----------------
 const PORT = process.env.PORT || 3000;
