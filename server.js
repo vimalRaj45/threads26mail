@@ -14,11 +14,24 @@ function generateOTP() {
 
 // ---------------- MAIL TRANSPORTER ----------------
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,          // SSL port
+  secure: true,       // use SSL
   auth: {
-    user: "vimalraj5207@gmail.com",     // sender
-    pass: "txcmjdwgbprjaxrg",            // 16-char app password (NO SPACES)
+    user: "vimalraj5207@gmail.com", // sender email
+    pass: "txcmjdwgbprjaxrg",       // 16-char app password
   },
+  family: 4,          // force IPv4
+  connectionTimeout: 10000,
+});
+
+// Verify connection on startup
+transporter.verify((err, success) => {
+  if (err) {
+    console.error("SMTP connection error:", err);
+  } else {
+    console.log("SMTP ready to send emails");
+  }
 });
 
 // ---------------- SEND OTP API ----------------
@@ -30,20 +43,21 @@ fastify.post("/send-otp", async (req, reply) => {
 
   const otp = generateOTP();
   const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
-
   otpStore.set(email, { otp, expiresAt });
 
-  await transporter.sendMail({
-    from: `"VSGRPS OTP" <vimalraj5207@gmail.com>`,
-    to: email,
-    subject: "OTP Verification",
-    html: `
-      <h2>Your OTP: ${otp}</h2>
-      <p>This OTP is valid for <b>5 minutes</b>.</p>
-    `,
-  });
+  try {
+    await transporter.sendMail({
+      from: `"VSGRPS OTP" <vimalraj5207@gmail.com>`,
+      to: email,
+      subject: "OTP Verification",
+      html: `<h2>Your OTP: ${otp}</h2><p>This OTP is valid for <b>5 minutes</b>.</p>`,
+    });
 
-  return { success: true, message: "OTP sent" };
+    return { success: true, message: "OTP sent successfully" };
+  } catch (err) {
+    console.error("Error sending OTP:", err);
+    return reply.code(500).send({ error: "Failed to send OTP. Try again later." });
+  }
 });
 
 // ---------------- VERIFY OTP API ----------------
@@ -82,7 +96,6 @@ fastify.get("/", async (req, reply) => {
   </style>
 </head>
 <body>
-
   <h2>Send OTP</h2>
   <input id="email" placeholder="Enter email" />
   <button onclick="sendOTP()">Send OTP</button>
@@ -96,23 +109,33 @@ fastify.get("/", async (req, reply) => {
 <script>
 async function sendOTP() {
   const email = document.getElementById("email").value;
-  const res = await fetch("/send-otp", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email })
-  });
-  document.getElementById("msg").innerText = await res.text();
+  try {
+    const res = await fetch("/send-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+    document.getElementById("msg").innerText = data.message || data.error;
+  } catch (err) {
+    document.getElementById("msg").innerText = "Failed to send OTP";
+  }
 }
 
 async function verifyOTP() {
   const email = document.getElementById("email").value;
   const otp = document.getElementById("otp").value;
-  const res = await fetch("/verify-otp", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, otp })
-  });
-  document.getElementById("msg").innerText = await res.text();
+  try {
+    const res = await fetch("/verify-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp })
+    });
+    const data = await res.json();
+    document.getElementById("msg").innerText = data.message || data.error;
+  } catch (err) {
+    document.getElementById("msg").innerText = "Failed to verify OTP";
+  }
 }
 </script>
 
@@ -121,7 +144,12 @@ async function verifyOTP() {
   `);
 });
 
-
-// ---------------- START SERVER (RENDER) ----------------
+// ---------------- START SERVER ----------------
 const PORT = process.env.PORT || 3000;
-fastify.listen({ port: PORT, host: "0.0.0.0" });
+fastify.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
+  if (err) {
+    console.error(err);
+    process.exit(1);
+  }
+  console.log(`Server running at ${address}`);
+});
