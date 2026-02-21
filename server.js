@@ -1,155 +1,99 @@
-import Fastify from "fastify";
-import nodemailer from "nodemailer";
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import dotenv from 'dotenv';
+import axios from 'axios';
+
+dotenv.config();
 
 const fastify = Fastify({ logger: true });
 
-// ---------------- OTP STORE (memory) ----------------
-const otpStore = new Map(); 
-// email -> { otp, expiresAt }
+/* -------------------- CORS -------------------- */
+await fastify.register(cors, {
+  origin: true
+});
 
-// ---------------- OTP GENERATOR ----------------
+/* -------------------- OTP Generator -------------------- */
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000);
 }
 
-// ---------------- MAIL TRANSPORTER ----------------
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,          // SSL port
-  secure: true,       // use SSL
-  auth: {
-    user: "vimalraj5207@gmail.com", // sender email
-    pass: "txcmjdwgbprjaxrg",       // 16-char app password
-  },
-  family: 4,          // force IPv4
-  connectionTimeout: 10000,
-});
+/* -------------------- Send OTP Email -------------------- */
+async function sendOTPEmail(toEmail, toName, otp) {
+  const response = await axios.post(
+    'https://api.brevo.com/v3/smtp/email',
+    {
+      sender: {
+        email: process.env.SENDER_EMAIL,
+        name: process.env.SENDER_NAME
+      },
+      to: [{ email: toEmail, name: toName }],
+      subject: 'Your OTP - Symposium Registration',
+      htmlContent: `
+        <div style="font-family: Arial, sans-serif; max-width: 500px;
+          margin: auto; padding: 30px; border: 1px solid #eee; border-radius: 10px;">
+          
+          <h2 style="color:#4F46E5;text-align:center;">Email Verification</h2>
+          
+          <p>Hello <strong>${toName}</strong>,</p>
+          <p>Your OTP for Symposium Registration is:</p>
+          
+          <div style="text-align:center;margin:30px 0;padding:20px;
+            background:#f5f5f5;border-radius:8px;">
+            <span style="font-size:40px;font-weight:bold;
+              color:#4F46E5;letter-spacing:12px;">${otp}</span>
+          </div>
+          
+          <p>⏰ Valid for <strong>5 minutes only.</strong></p>
+          <p>If you didn't request this, ignore this email.</p>
+        </div>
+      `
+    },
+    {
+      headers: {
+        'api-key': process.env.BREVO_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    }
+  );
 
-// Verify connection on startup
-transporter.verify((err, success) => {
-  if (err) {
-    console.error("SMTP connection error:", err);
-  } else {
-    console.log("SMTP ready to send emails");
-  }
-});
-
-// ---------------- SEND OTP API ----------------
-fastify.post("/send-otp", async (req, reply) => {
-  const { email } = req.body;
-  if (!email) {
-    return reply.code(400).send({ error: "Email required" });
-  }
-
-  const otp = generateOTP();
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
-  otpStore.set(email, { otp, expiresAt });
-
-  try {
-    await transporter.sendMail({
-      from: `"VSGRPS OTP" <vimalraj5207@gmail.com>`,
-      to: email,
-      subject: "OTP Verification",
-      html: `<h2>Your OTP: ${otp}</h2><p>This OTP is valid for <b>5 minutes</b>.</p>`,
-    });
-
-    return { success: true, message: "OTP sent successfully" };
-  } catch (err) {
-    console.error("Error sending OTP:", err);
-    return reply.code(500).send({ error: "Failed to send OTP. Try again later." });
-  }
-});
-
-// ---------------- VERIFY OTP API ----------------
-fastify.post("/verify-otp", async (req, reply) => {
-  const { email, otp } = req.body;
-
-  const record = otpStore.get(email);
-  if (!record) {
-    return reply.code(400).send({ error: "OTP not found" });
-  }
-
-  if (Date.now() > record.expiresAt) {
-    otpStore.delete(email);
-    return reply.code(400).send({ error: "OTP expired" });
-  }
-
-  if (record.otp !== Number(otp)) {
-    return reply.code(400).send({ error: "Invalid OTP" });
-  }
-
-  otpStore.delete(email);
-  return { success: true, message: "OTP verified successfully" };
-});
-
-// ---------------- HTML PAGE ----------------
-fastify.get("/", async (req, reply) => {
-  reply.type("text/html").send(`
-<!DOCTYPE html>
-<html>
-<head>
-  <title>OTP Verification</title>
-  <style>
-    body { font-family: Arial; max-width: 400px; margin: 50px auto; }
-    input, button { width: 100%; padding: 10px; margin: 8px 0; }
-    button { cursor: pointer; }
-  </style>
-</head>
-<body>
-  <h2>Send OTP</h2>
-  <input id="email" placeholder="Enter email" />
-  <button onclick="sendOTP()">Send OTP</button>
-
-  <h2>Verify OTP</h2>
-  <input id="otp" placeholder="Enter OTP" />
-  <button onclick="verifyOTP()">Verify OTP</button>
-
-  <p id="msg"></p>
-
-<script>
-async function sendOTP() {
-  const email = document.getElementById("email").value;
-  try {
-    const res = await fetch("/send-otp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email })
-    });
-    const data = await res.json();
-    document.getElementById("msg").innerText = data.message || data.error;
-  } catch (err) {
-    document.getElementById("msg").innerText = "Failed to send OTP";
-  }
+  return response.data;
 }
 
-async function verifyOTP() {
-  const email = document.getElementById("email").value;
-  const otp = document.getElementById("otp").value;
+/* -------------------- API ROUTE -------------------- */
+fastify.post('/send-otp', async (request, reply) => {
   try {
-    const res = await fetch("/verify-otp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, otp })
-    });
-    const data = await res.json();
-    document.getElementById("msg").innerText = data.message || data.error;
-  } catch (err) {
-    document.getElementById("msg").innerText = "Failed to verify OTP";
-  }
-}
-</script>
+    const { email, name } = request.body;
 
-</body>
-</html>
-  `);
+    if (!email || !name) {
+      return reply.code(400).send({
+        success: false,
+        message: 'Email and Name are required'
+      });
+    }
+
+    const otp = generateOTP();
+
+    await sendOTPEmail(email, name, otp);
+
+    return reply.send({
+      success: true,
+      message: 'OTP sent successfully',
+      otp // ⚠️ remove in production
+    });
+
+  } catch (error) {
+    fastify.log.error(error);
+    return reply.code(500).send({
+      success: false,
+      message: 'Failed to send OTP'
+    });
+  }
 });
 
-// ---------------- START SERVER ----------------
+/* -------------------- SERVER START -------------------- */
 const PORT = process.env.PORT || 3000;
-fastify.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
-  if (err) {
-    console.error(err);
-    process.exit(1);
-  }
-  console.log(`Server running at ${address}`);
+
+fastify.listen({ port: PORT, host: '0.0.0.0' }, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
